@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 录音基础权限 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    
+    <!-- 后台保活所需权限 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <application>
+        <!-- 注册录音前台服务，保证后台运行，双拼写兼容 UTS 编译器 -->
+        <service 
+            android:name="uts.sdk.modules.LXQ_NativeRecorderModule.RecorderService" 
+            android:foregroundServiceType="microphone" 
+            android:exported="false" />
+        <service 
+            android:name="uts.sdk.modules.LXQNativeRecorderModule.RecorderService" 
+            android:foregroundServiceType="microphone" 
+            android:exported="false" />
+    </application>
+</manifest>

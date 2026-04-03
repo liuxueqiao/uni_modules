@@ -1,0 +1,39 @@
+export type StartRecordOptions = {
+    /**
+     * 采样率，默认 16000
+     */
+    sampleRate?: number;
+    /**
+     * 通道数，默认 1
+     */
+    channelCount?: number;
+    /**
+     * 音频格式，如 "pcm"
+     */
+    format?: string;
+    /**
+     * 状态事件回调
+     */
+    onEvent?: (res: RecordEventParams) => void;
+    /**
+     * 音频帧数据回调
+     */
+    onFrameRecorded?: (res: RecordFrameParams) => void;
+}
+
+export type RecordEventParams = {
+    type: string; // "event"
+    code: number; // 0: started, 1: stopped, -1: error
+    msg: string;
+    filePath?: string | null;
+}
+
+export type RecordFrameParams = {
+    type: string; // "frame"
+    data: string; // Base64 编码的音频 PCM 数据
+}
+
+export interface LXQNativeRecorder {
+    startRecord(options: StartRecordOptions): void;
+    stopRecord(): void;
+}

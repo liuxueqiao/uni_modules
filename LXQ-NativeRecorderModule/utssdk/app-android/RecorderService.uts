@@ -1,0 +1,196 @@
+import Service from 'android.app.Service';
+import Intent from 'android.content.Intent';
+import IBinder from 'android.os.IBinder';
+import Notification from 'android.app.Notification';
+import NotificationChannel from 'android.app.NotificationChannel';
+import NotificationManager from 'android.app.NotificationManager';
+import Build from 'android.os.Build';
+import Context from 'android.content.Context';
+import PowerManager from 'android.os.PowerManager';
+
+import AudioRecord from 'android.media.AudioRecord';
+import AudioFormat from 'android.media.AudioFormat';
+import MediaRecorder from 'android.media.MediaRecorder';
+import Base64 from 'android.util.Base64';
+import Thread from 'java.lang.Thread';
+import Runnable from 'java.lang.Runnable';
+import Log from 'android.util.Log';
+import Exception from 'java.lang.Exception';
+
+import { onRecordEvent, onFrameRecorded } from './index.uts';
+
+export class RecorderService extends Service {
+    private audioRecord: AudioRecord | null = null;
+    private recordingThread: Thread | null = null;
+    private isRecording: boolean = false;
+    private wakeLock: PowerManager.WakeLock | null = null;
+
+    override onCreate() {
+        super.onCreate();
+        let pm = this.getSystemService(Context.POWER_SERVICE) as PowerManager | null;
+        if (pm != null) {
+            this.wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NativeRecorder::WakeLock");
+        }
+    }
+
+    override onStartCommand(intent: Intent | null, flags: Int, startId: Int): Int {
+        if (intent != null) {
+            let action = intent.getAction();
+            if ("ACTION_START_RECORD" == action) {
+                this.startForegroundService();
+                if (!this.isRecording) {
+                    this.startRecording(intent);
+                }
+            } else if ("ACTION_STOP_RECORD" == action) {
+                this.stopRecording();
+                this.stopForeground(true);
+                this.stopSelf();
+            }
+        }
+        return Service.START_STICKY;
+    }
+
+    private startForegroundService() {
+        let channelId = "NativeRecorderChannel";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            let channel = new NotificationChannel(
+                channelId,
+                "后台录音服务",
+                NotificationManager.IMPORTANCE_LOW
+            );
+            channel.setDescription("用于保持后台录音不被系统杀死");
+            let manager = this.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager | null;
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
+        }
+
+        let builder: Notification.Builder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder = new Notification.Builder(this, channelId);
+        } else {
+            builder = new Notification.Builder(this);
+        }
+
+        let iconRes = this.getApplicationInfo().icon;
+        if (iconRes == 0) {
+            iconRes = android.R.drawable.sym_def_app_icon;
+        }
+
+        builder.setContentTitle("录音中")
+               .setContentText("正在后台运行录音服务以保证持续采集...")
+               .setSmallIcon(iconRes)
+               .setOngoing(true);
+
+        let notification = builder.build();
+
+        try {
+            if (Build.VERSION.SDK_INT >= 29) { 
+                // 8 = FOREGROUND_SERVICE_TYPE_MICROPHONE
+                this.startForeground(1001, notification, 8);
+            } else {
+                this.startForeground(1001, notification);
+            }
+        } catch (e: Exception) {
+            Log.e("RecorderService", "Failed to start foreground", e);
+        }
+
+        try {
+            if (this.wakeLock != null && !this.wakeLock!.isHeld()) {
+                this.wakeLock!.acquire();
+            }
+        } catch (e: Exception) {
+            Log.e("RecorderService", "Failed to acquire wake lock", e);
+        }
+    }
+
+    private startRecording(intent: Intent) {
+        let sampleRate = intent.getIntExtra("sampleRate", 16000);
+        let channelCount = intent.getIntExtra("channelCount", 1);
+        let channelConfig = channelCount == 2 ? AudioFormat.CHANNEL_IN_STEREO : AudioFormat.CHANNEL_IN_MONO;
+        let audioFormat = AudioFormat.ENCODING_PCM_16BIT;
+
+        let minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat);
+        let calcSize = Math.floor(sampleRate * 2 * channelCount * 128 / 1000);
+        let frameSize = Math.max(minBufferSize, calcSize.toInt());
+
+        try {
+            this.audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, channelConfig, audioFormat, frameSize * 2);
+            if (this.audioRecord!.getState() != AudioRecord.STATE_INITIALIZED) {
+                Log.e("RecorderService", "AudioRecord initialization failed");
+                onRecordEvent(-1, "start failed: AudioRecord not initialized", null);
+                this.stopSelf();
+                return;
+            }
+
+            this.audioRecord!.startRecording();
+            this.isRecording = true;
+            onRecordEvent(0, "started", null);
+
+            this.recordingThread = new Thread(new Runnable({
+                run: () => {
+                    let audioData = new Int8Array(frameSize);
+                    while (this.isRecording && this.audioRecord != null) {
+                        try {
+                            let readResult = this.audioRecord!.read(audioData, 0, frameSize);
+                            if (readResult > 0) {
+                                let readData = new Int8Array(readResult);
+                                for (let i = 0; i < readResult; i++) {
+                                    readData[i] = audioData[i];
+                                }
+                                let base64Str = Base64.encodeToString(readData, Base64.NO_WRAP);
+                                onFrameRecorded(base64Str);
+                            }
+                        } catch (e: Exception) {
+                            Log.e("RecorderService", "Error reading audio data: " + e.message);
+                        }
+                    }
+                }
+            }), "AudioRecorder Thread");
+            this.recordingThread!.start();
+
+        } catch (e: Exception) {
+            Log.e("RecorderService", "startRecording failed: " + e.message);
+            onRecordEvent(-1, "start failed: " + e.message, null);
+            this.stopSelf();
+        }
+    }
+
+    private stopRecording() {
+        this.isRecording = false;
+        if (this.audioRecord != null) {
+            try {
+                if (this.audioRecord!.getState() == AudioRecord.STATE_INITIALIZED) {
+                    this.audioRecord!.stop();
+                }
+                this.audioRecord!.release();
+            } catch (e: Exception) {
+                Log.e("RecorderService", "stopRecording failed: " + e.message);
+            } finally {
+                this.audioRecord = null;
+            }
+        }
+        if (this.recordingThread != null) {
+            try {
+                this.recordingThread!.join(500);
+            } catch (e: Exception) {
+                e.printStackTrace();
+            }
+            this.recordingThread = null;
+        }
+        onRecordEvent(1, "stopped", null);
+
+        if (this.wakeLock != null && this.wakeLock!.isHeld()) {
+            this.wakeLock!.release();
+        }
+    }
+
+    override onBind(intent: Intent): IBinder | null {
+        return null;
+    }
+
+    override onDestroy() {
+        this.stopRecording();
+        super.onDestroy();
+    }
+}

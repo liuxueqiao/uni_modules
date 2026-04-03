@@ -1,0 +1,114 @@
+import { StartRecordOptions, RecordEventParams, RecordFrameParams } from '../interface.uts';
+import audio from '@ohos.multimedia.audio';
+import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
+import wantAgent from '@ohos.app.ability.wantAgent';
+import util from '@ohos.util';
+
+let audioCapturer: audio.AudioCapturer | null = null;
+let isRecording = false;
+let globalOptions: StartRecordOptions | null = null;
+let bgTaskContext: any = null;
+
+export function startRecord(options: StartRecordOptions) {
+    if (isRecording) {
+        options.onEvent?.({ type: "event", code: -1, msg: "start failed: is recording", filePath: null } as RecordEventParams);
+        return;
+    }
+    globalOptions = options;
+
+    let sampleRate = options.sampleRate ?? 16000;
+    let sr = audio.AudioSamplingRate.SAMPLE_RATE_16000;
+    if (sampleRate == 8000) sr = audio.AudioSamplingRate.SAMPLE_RATE_8000;
+    if (sampleRate == 32000) sr = audio.AudioSamplingRate.SAMPLE_RATE_32000;
+    if (sampleRate == 44100) sr = audio.AudioSamplingRate.SAMPLE_RATE_44100;
+    if (sampleRate == 48000) sr = audio.AudioSamplingRate.SAMPLE_RATE_48000;
+
+    let channels = (options.channelCount == 2) ? audio.AudioChannel.CHANNEL_2 : audio.AudioChannel.CHANNEL_1;
+
+    let capturerOptions: audio.AudioCapturerOptions = {
+        streamInfo: {
+            samplingRate: sr,
+            channels: channels,
+            sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+            encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+        },
+        capturerInfo: {
+            source: audio.SourceType.SOURCE_TYPE_MIC,
+            capturerFlags: 0
+        }
+    };
+
+    audio.createAudioCapturer(capturerOptions).then((capturer) => {
+        audioCapturer = capturer;
+        
+        // 开启鸿蒙后台长时任务保活
+        startBackgroundTask();
+
+        // 绑定数据读取事件
+        capturer.on('readData', (buffer: ArrayBuffer) => {
+            let helper = new util.Base64Helper();
+            let uint8Arr = new Uint8Array(buffer);
+            let base64Str = helper.encodeToStringSync(uint8Arr);
+            if (globalOptions != null) {
+                globalOptions!.onFrameRecorded?.({ type: "frame", data: base64Str } as RecordFrameParams);
+            }
+        });
+
+        capturer.start().then(() => {
+            isRecording = true;
+            options.onEvent?.({ type: "event", code: 0, msg: "started", filePath: null } as RecordEventParams);
+        }).catch((err: any) => {
+            options.onEvent?.({ type: "event", code: -1, msg: "start failed: " + err.message, filePath: null } as RecordEventParams);
+            stopBackgroundTask();
+        });
+    }).catch((err: any) => {
+        options.onEvent?.({ type: "event", code: -1, msg: "create capturer failed: " + err.message, filePath: null } as RecordEventParams);
+    });
+}
+
+export function stopRecord() {
+    if (isRecording && audioCapturer != null) {
+        audioCapturer!.stop().then(() => {
+            audioCapturer!.release();
+            audioCapturer = null;
+            isRecording = false;
+            stopBackgroundTask();
+            if (globalOptions != null) {
+                globalOptions!.onEvent?.({ type: "event", code: 1, msg: "stopped", filePath: null } as RecordEventParams);
+                globalOptions = null;
+            }
+        });
+    }
+}
+
+function startBackgroundTask() {
+    try {
+        // 在鸿蒙应用运行期间，全局 getContext 可以获取上下文
+        let context = getContext() as any; 
+        let wantAgentInfo = {
+            wants: [{
+                bundleName: context.applicationInfo.name,
+                abilityName: "EntryAbility"
+            }],
+            operationType: wantAgent.OperationType.START_ABILITY,
+            requestCode: 0,
+            wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+        };
+        wantAgent.getWantAgent(wantAgentInfo).then((agent) => {
+            backgroundTaskManager.startBackgroundRunning(context, backgroundTaskManager.BackgroundMode.AUDIO_RECORDING, agent).then(() => {
+                bgTaskContext = context;
+            });
+        });
+    } catch(e) {
+        console.error("鸿蒙启动后台长时任务失败", e);
+    }
+}
+
+function stopBackgroundTask() {
+    try {
+        if (bgTaskContext != null) {
+            backgroundTaskManager.stopBackgroundRunning(bgTaskContext);
+            bgTaskContext = null;
+        }
+    } catch(e) {}
+}

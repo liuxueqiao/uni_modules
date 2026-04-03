@@ -1,0 +1,83 @@
+import { StartRecordOptions, RecordEventParams, RecordFrameParams } from '../interface.uts';
+import { AVAudioSession, AVAudioSessionCategoryPlayAndRecord, AVAudioSessionModeDefault } from 'AVFoundation';
+import { AVAudioEngine, AVAudioFormat, AVAudioPCMBuffer } from 'AVFoundation';
+import { NSData } from 'Foundation';
+import Exception from 'java.lang.Exception'; // UTS 跨端中通用的异常抛出类型
+
+let isRecording = false;
+let globalOptions: StartRecordOptions | null = null;
+let audioEngine: AVAudioEngine | null = null;
+
+export function startRecord(options: StartRecordOptions) {
+    if (isRecording) {
+        options.onEvent?.({ type: "event", code: -1, msg: "start failed: is recording", filePath: null } as RecordEventParams);
+        return;
+    }
+    
+    globalOptions = options;
+    
+    try {
+        let session = AVAudioSession.sharedInstance();
+        // 设置 PlayAndRecord 会话，配合 Info.plist 的 background modes (audio) 保证后台录音不被中断
+        session.setCategory(AVAudioSessionCategoryPlayAndRecord, error = null);
+        session.setActive(true, error = null);
+        
+        audioEngine = new AVAudioEngine();
+        let inputNode = audioEngine!.inputNode;
+        
+        let sampleRate = options.sampleRate != null ? options.sampleRate! : 16000.0;
+        let channelCount = options.channelCount != null ? options.channelCount!.toUInt32() : 1;
+        
+        // 1 对应 AVAudioCommonFormat.pcmFormatInt16
+        let format = new AVAudioFormat(commonFormat = 1, sampleRate = sampleRate, channels = channelCount, interleaved = false);
+        
+        inputNode.installTap(onBus = 0, bufferSize = 2048, format = format, block = (buffer: AVAudioPCMBuffer, time: any) => {
+            let int16ChannelData = buffer.int16ChannelData;
+            if (int16ChannelData != null) {
+                let frameLength = buffer.frameLength;
+                let length = frameLength * channelCount * 2; // Int16 即每帧2字节
+                // 获取第一条声道的底层指针
+                let pointer = int16ChannelData![0];
+                let data = new NSData(bytes = pointer, length = length);
+                // 转换为 Base64 字符串
+                let base64Str = data.base64EncodedStringWithOptions(0);
+                
+                if (globalOptions != null) {
+                    globalOptions!.onFrameRecorded?.({ type: "frame", data: base64Str } as RecordFrameParams);
+                }
+            }
+        });
+        
+        audioEngine!.prepare();
+        audioEngine!.startAndReturnError();
+        
+        isRecording = true;
+        options.onEvent?.({ type: "event", code: 0, msg: "started", filePath: null } as RecordEventParams);
+        
+    } catch (e: Exception) {
+        options.onEvent?.({ type: "event", code: -1, msg: "start failed: " + e.message, filePath: null } as RecordEventParams);
+        isRecording = false;
+        globalOptions = null;
+        if (audioEngine != null) {
+            audioEngine!.stop();
+            audioEngine = null;
+        }
+    }
+}
+
+export function stopRecord() {
+    if (isRecording && audioEngine != null) {
+        isRecording = false;
+        audioEngine!.inputNode.removeTap(onBus = 0);
+        audioEngine!.stop();
+        audioEngine = null;
+        
+        try {
+            AVAudioSession.sharedInstance().setActive(false, error = null);
+        } catch (e: Exception) {}
+    }
+    if (globalOptions != null) {
+        globalOptions!.onEvent?.({ type: "event", code: 1, msg: "stopped", filePath: null } as RecordEventParams);
+        globalOptions = null;
+    }
+}

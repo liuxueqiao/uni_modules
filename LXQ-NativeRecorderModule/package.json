@@ -1,0 +1,49 @@
+{
+  "id": "LXQ-NativeRecorderModule",
+  "displayName": "LXQ 原生录音插件",
+  "version": "1.0.0",
+  "description": "基于 UTS 开发的原生录音插件，支持 Android、iOS、HarmonyOS，提供开始、暂停、恢复、停止录音等功能",
+  "type": "utssdk",
+  "author": "liuxueqiao",
+  "uni_modules": {
+    "platforms": {
+      "cloud": {
+        "tcb": "y",
+        "aliyun": "y"
+      },
+      "client": {
+        "App": {
+          "app-vue": "y",
+          "app-nvue": "y",
+          "app-uvue": "y"
+        },
+        "H5-mobile": {
+          "Safari": "y",
+          "Android Browser": "y",
+          "WeChat": "y"
+        },
+        "H5-pc": {
+          "Chrome": "y",
+          "IE": "y",
+          "Edge": "y",
+          "Firefox": "y",
+          "Safari": "y"
+        },
+        "Mp-Weixin": "y",
+        "Mp-Alipay": "y",
+        "Mp-Baidu": "y",
+        "Mp-Toutiao": "y",
+        "Mp-Lark": "y",
+        "Mp-QQ": "y",
+        "Mp-Kuaishou": "y",
+        "Mp-Jd": "y",
+        "Mp-360": "y",
+        "Quickapp-Webview": "y",
+        "Quickapp-Webview-Union": "y",
+        "Quickapp-Webview-Huawei": "y"
+      }
+    },
+    "dependencies": [],
+    "encrypt": []
+  }
+}

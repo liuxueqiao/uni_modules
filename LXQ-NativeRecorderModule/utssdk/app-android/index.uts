@@ -1,0 +1,74 @@
+import { StartRecordOptions, RecordEventParams, RecordFrameParams } from '../interface.uts';
+import Intent from 'android.content.Intent';
+import UTSAndroid from 'io.dcloud.uts.android.UTSAndroid';
+import Build from 'android.os.Build';
+import Exception from 'java.lang.Exception';
+import { RecorderService } from './RecorderService.uts';
+
+let globalOptions: StartRecordOptions | null = null;
+
+export function startRecord(options: StartRecordOptions) {
+    if (globalOptions != null) {
+        options.onEvent?.({ type: "event", code: -1, msg: "start failed: is recording", filePath: null } as RecordEventParams);
+        return;
+    }
+    
+    globalOptions = options;
+    
+    let context = UTSAndroid.getAppContext();
+    if (context == null) {
+        options.onEvent?.({ type: "event", code: -1, msg: "SDK Context is null", filePath: null } as RecordEventParams);
+        globalOptions = null;
+        return;
+    }
+    
+    let intent = new Intent(context, RecorderService::class.java);
+    intent.setAction("ACTION_START_RECORD");
+    
+    if (options.sampleRate != null) {
+        intent.putExtra("sampleRate", options.sampleRate!.toInt());
+    }
+    if (options.channelCount != null) {
+        intent.putExtra("channelCount", options.channelCount!.toInt());
+    }
+    
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent);
+        } else {
+            context.startService(intent);
+        }
+    } catch (e: Exception) {
+        options.onEvent?.({ type: "event", code: -1, msg: "Failed to start record service: " + e.message, filePath: null } as RecordEventParams);
+        globalOptions = null;
+    }
+}
+
+export function stopRecord() {
+    let context = UTSAndroid.getAppContext();
+    if (context == null) return;
+    
+    let intent = new Intent(context, RecorderService::class.java);
+    intent.setAction("ACTION_STOP_RECORD");
+    try {
+        context.startService(intent);
+    } catch (e: Exception) {
+        // 忽略异常
+    }
+}
+
+// 供 Service 调用的内部回调桥梁
+export function onRecordEvent(code: Int, msg: string, filePath: string | null) {
+    if (globalOptions != null) {
+        globalOptions!.onEvent?.({ type: "event", code: code.toNumber(), msg: msg, filePath: filePath } as RecordEventParams);
+        if (code == 1 || code == -1) {
+            globalOptions = null; // 停止或错误时清理引用
+        }
+    }
+}
+
+export function onFrameRecorded(base64Str: string) {
+    if (globalOptions != null) {
+        globalOptions!.onFrameRecorded?.({ type: "frame", data: base64Str } as RecordFrameParams);
+    }
+}
